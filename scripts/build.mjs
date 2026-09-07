@@ -49,7 +49,20 @@ export function addDays(s, n) {
 // ---------------------------------------------------------------- star-history
 // 归一化响应为 [{weekStart:'YYYY-MM-DD', stars:n}]，返回顺序最新在前。
 const WEEK_KEYS = ['week_start', 'weekStart', 'week', 'date', 'start', 'bucket', 'period', 'timestamp'];
-const STAR_KEYS = ['stars', 'stargazers_count', 'count', 'added', 'new_stars', 'added_stars', 'increment', 'delta'];
+const STAR_KEYS = ['stars', 'stargazers_count', 'count', 'added', 'new_stars', 'added_stars', 'increment', 'delta', 'total'];
+// week 可能是 Unix 秒(10位)/毫秒(13位) 或 ISO 日期字符串，统一归一化为 YYYY-MM-DD
+function weekStartToDate(v) {
+  const str = String(v ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  if (/^\d{10,13}$/.test(str)) {
+    const n = Number(str);
+    const ms = str.length >= 13 ? n : n * 1000;
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : str.slice(0, 10);
+  }
+  const d = Date.parse(str);
+  return Number.isFinite(d) ? new Date(d).toISOString().slice(0, 10) : str.slice(0, 10);
+}
 function firstStr(obj, keys) {
   for (const k of keys) if (obj[k] != null && String(obj[k]).trim()) return String(obj[k]).trim();
   return null;
@@ -75,7 +88,7 @@ export function normalizeStarHistory(raw) {
     const ws = firstStr(b, WEEK_KEYS);
     const st = firstNum(b, STAR_KEYS);
     if (ws == null || st == null) continue;
-    out.push({ weekStart: ws.slice(0, 10), stars: st });
+    out.push({ weekStart: weekStartToDate(ws), stars: st });
   }
   // 不假设返回顺序：若相邻桶按周升序则反转，保证最新在前。
   if (out.length >= 2) {
@@ -416,7 +429,7 @@ async function ghFetch(url, { token, accept = 'application/vnd.github+json', ret
         continue;
       }
     }
-    if (res.status === 404) return null;
+    if (res.status === 404 || res.status === 422) return null;
     if (!res.ok) throw new Error(`gh ${res.status} ${url}`);
     const text = await res.text();
     try { return { status: res.status, json: JSON.parse(text), remaining: Number(res.headers.get('x-ratelimit-remaining')) }; }
@@ -560,7 +573,7 @@ async function discover({ token, date, log }) {
   const scored = [];
   const uniq = [...new Map(entities.map((e) => [e.fullName, e])).values()];
   await mapLimit(uniq, 5, async (e) => {
-    const h = await ghFetch(`https://api.github.com/repos/${e.fullName}/star-history`, { token });
+    const h = await ghFetch(`https://api.github.com/repos/${e.fullName}/stargazers/history`, { token });
     histCache.set(e.fullName, h?.json ?? null);
   });
   const samples = [];
@@ -630,7 +643,7 @@ async function main() {
   const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 
   if (cli.raw) {
-    const h = await ghFetch(`https://api.github.com/repos/${cli.raw}/star-history`, { token });
+    const h = await ghFetch(`https://api.github.com/repos/${cli.raw}/stargazers/history`, { token });
     console.log(JSON.stringify(h?.json ?? null, null, 2));
     return;
   }
@@ -645,7 +658,7 @@ async function main() {
   if (picked.length === 0) {
     log('⚠️ 本次未选出任何 skill。诊断信息：');
     console.log(JSON.stringify({ ...diag, picked: picked.length }, null, 2));
-    log('请把上方诊断贴给维护者，或在本地先跑：node scripts/build.mjs --raw-star-history openai/skills 查看真实字段。');
+    log('请把上方诊断贴给维护者，或在本地先跑：node scripts/build.mjs --raw-star-history openai/skills 查看 /stargazers/history 真实字段。');
     process.exit(1);
   }
 

@@ -19,6 +19,18 @@ test('addDays 跨月正确', () => {
 });
 
 // ---------- star-history 归一化：三种字段组合 ----------
+test('normalizeStarHistory：识别 /stargazers/history 的 unix week + total 字段', () => {
+  const wk = 1754784000; // 某周起始（Unix 秒）
+  const raw = [
+    { week: wk, total: 19, days: [0, 12, 7, 0, 0, 0, 0] },
+    { week: wk - 7 * 86400, total: 5, days: [0, 0, 5, 0, 0, 0, 0] },
+  ];
+  const out = normalizeStarHistory(raw);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].stars, 19);
+  assert.equal(out[0].weekStart, new Date(wk * 1000).toISOString().slice(0, 10));
+  assert.equal(out[1].stars, 5);
+});
 test('normalizeStarHistory 兼容三种字段名并统一为最新在前', () => {
   const a = [{ week_start: '2026-09-01', stars: 10 }, { week_start: '2026-08-25', stars: 4 }];
   const b = [{ week: '2026-09-01', stargazers_count: 10 }, { week: '2026-08-25', stargazers_count: 4 }];

@@ -2,7 +2,7 @@
 
 ## 摘要
 每周一 07:00（上海时间，= UTC 周日 23:00）由 GitHub Actions 跑 `scripts/build.mjs`：
-发现 Codex 生态候选仓库 → 拉 GitHub `/star-history` 周增星数据 → 归一化周增速打分 →
+发现 Codex 生态候选仓库 → 拉 GitHub `/stargazers/history` 周增星数据 → 归一化周增速打分 →
 30 天冷却去重 → 选出 **Top 5 Codex skill** → 各调一次 **DeepSeek** 生成中文深度解读 →
 渲染静态 HTML 提交到 `docs/`，由 GitHub Pages 发布。仅 Skill 分区，无 agent 项目/MCP。
 
@@ -16,7 +16,7 @@
 - 生成物：`docs/index.html`、`docs/archive/YYYY-MM-DD.html`、`docs/data/YYYY-MM-DD.json`、`docs/robots.txt`
 
 ## 为什么每周
-- `/star-history` 按自然周分桶：同一周内每天跑排序数据几乎不变，只有周界才换新桶；
+- `/stargazers/history` 按自然周分桶（返回 `week`/`total`/`days`，最新在前，`total` 为该周新增）：同一周内每天跑排序数据几乎不变，只有周界才换新桶；
   周一 07:00 跑正好取到「刚结束的完整周」。
 - Codex skill 生态比全 agent 池小，叠加 30 天冷却后每天跑会大量产生 `repeat` 填充。
 - `workflow_dispatch` 保留用于手动补跑/校准。
@@ -33,7 +33,7 @@
 
 ## 打分
 ```
-buckets = star-history 周桶（字段自适应归一化），剔除「尚未结束的当前周」，最新在前
+buckets = `/stargazers/history` 周桶（`week` 为 Unix 秒、`total` 为周增星；自适应归一化），剔除「尚未结束的当前周」，最新在前
 v_now    = buckets[0].stars
 baseline = mean(buckets[1..8].stars)
 burst    = v_now >= 3 * max(baseline, 1) && v_now >= 5
@@ -67,7 +67,7 @@ score    = v_now / ln(1 + total_stars)
 `node scripts/build.mjs [--dry-run] [--limit N] [--date YYYY-MM-DD] [--no-llm] [--raw-star-history owner/repo]`
 - `--dry-run`：打印榜单与 score 明细，不写文件、不调 LLM
 - `--date`：补生成指定日期（只写该日归档与数据，不覆盖 index）
-- `--raw-star-history`：打印某仓库原始响应，用于首跑校准字段名
+- `--raw-star-history`：打印某仓库 `/stargazers/history` 原始响应，用于排查字段
 
 ## 部署
 1. 建 public 仓库，推送本目录代码。
@@ -79,7 +79,7 @@ score    = v_now / ln(1 + total_stars)
 
 ## 测试
 `node --test scripts/build.test.mjs`（离线、零依赖）覆盖：
-- 残缺当前周剔除（含周一新周起点）；star-history 三种字段名组合归一化；空/单桶安全
+- 残缺当前周剔除（含周一新周起点）；`/stargazers/history` 的 unix `week`+`total` 适配；多种字段名组合；空/单桶安全
 - 归一化打分（小仓库更高分）；burst 3× 临界两侧；vNow/baseline 为 0 无 NaN
 - 30 天冷却按日期过滤（跨月）；burst 豁免；同仓库 ≤2 / 同 owner ≤2；不足补齐标 `repeat`；
   同一输入两次输出一致
@@ -88,8 +88,10 @@ score    = v_now / ln(1 + total_stars)
 - LLM：假响应六字段解析、失败留空不阻塞；UTC 周日 23:00 → 上海周一（含跨月跨年）
 
 ## 假设
-- `/star-history` 字段名需首跑用 `--raw-star-history` 校准（唯一现场校准点）；代码不假设
-  周桶为 ISO 还是自然周，只按「今天是否落在桶区间」判残缺。
-- `GITHUB_TOKEN` 足以调用 star-history 与 code search；若 401/403，回退为加零 scope PAT 并改 token 读取。
+- 数据源接口：`GET /repos/{owner}/{repo}/stargazers/history`（2026-09-04 上线，privacy-safe）。
+  每条：`week`=周起始 Unix 秒、`total`=该周新增 star、`days`=周内每日分布。最新在前；
+  不带 auth 也可调（公开仓库），Actions 用 `GITHUB_TOKEN`；422 视为无数据跳过，404 跳过。
+  周界不保证与 UTC 对齐：我们用 `week` 转日期并按「今天是否落在该桶区间」判残缺当前周。
+- `GITHUB_TOKEN` 足以调用 `/stargazers/history`、code search 与仓库元数据；若 401/403，回退为加零 scope PAT。
 - 仓库必须 public（Pages + Actions 定时任务稳定）；站点公开但 noindex。
 - 大陆网络访问 `*.github.io` 可能需代理，由桌面端自行解决。
