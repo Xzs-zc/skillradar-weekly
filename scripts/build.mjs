@@ -48,8 +48,8 @@ export function addDays(s, n) {
 
 // ---------------------------------------------------------------- star-history
 // 归一化响应为 [{weekStart:'YYYY-MM-DD', stars:n}]，返回顺序最新在前。
-const WEEK_KEYS = ['week_start', 'weekStart', 'week', 'date', 'start'];
-const STAR_KEYS = ['stars', 'stargazers_count', 'count', 'added', 'new_stars'];
+const WEEK_KEYS = ['week_start', 'weekStart', 'week', 'date', 'start', 'bucket', 'period', 'timestamp'];
+const STAR_KEYS = ['stars', 'stargazers_count', 'count', 'added', 'new_stars', 'added_stars', 'increment', 'delta'];
 function firstStr(obj, keys) {
   for (const k of keys) if (obj[k] != null && String(obj[k]).trim()) return String(obj[k]).trim();
   return null;
@@ -62,7 +62,13 @@ function firstNum(obj, keys) {
   return null;
 }
 export function normalizeStarHistory(raw) {
-  if (!Array.isArray(raw)) return [];
+  let arr = Array.isArray(raw) ? raw : null;
+  if (!arr && raw && typeof raw === 'object') {
+    for (const k of ['buckets', 'data', 'items', 'weeks', 'series', 'entries', 'history']) {
+      if (Array.isArray(raw[k])) { arr = raw[k]; break; }
+    }
+  }
+  if (!Array.isArray(arr)) return [];
   const out = [];
   for (const b of raw) {
     if (!b || typeof b !== 'object') continue;
@@ -557,14 +563,25 @@ async function discover({ token, date, log }) {
     const h = await ghFetch(`https://api.github.com/repos/${e.fullName}/star-history`, { token });
     histCache.set(e.fullName, h?.json ?? null);
   });
+  const samples = [];
   for (const e of entities) {
-    const buckets = dropIncompleteWeek(normalizeStarHistory(histCache.get(e.fullName)), date);
+    const raw = histCache.get(e.fullName);
+    const buckets = dropIncompleteWeek(normalizeStarHistory(raw), date);
     const st = calcStats(buckets, e.totalStars);
-    if (!st) continue;
+    if (!st) {
+      if (samples.length < 3) {
+        samples.push({
+          fullName: e.fullName,
+          buckets: buckets.length,
+          raw: raw != null ? JSON.stringify(raw).slice(0, 600) : 'NO_RESPONSE',
+        });
+      }
+      continue;
+    }
     const weekly = buckets.slice(0, 9).slice().reverse(); // 时间从左到右
     scored.push({ ...e, ...st, weekly });
   }
-  return scored;
+  return { entities: scored, diag: { candidates: repoList.length, eligible: eligible.length, entities: entities.length, scored: scored.length, samples } };
 }
 
 // ---------------------------------------------------------------- 输出
@@ -620,10 +637,17 @@ async function main() {
   if (!cli.date || !/^\d{4}-\d{2}-\d{2}$/.test(cli.date)) throw new Error('--date 需为 YYYY-MM-DD');
 
   log(`开始构建：date=${cli.date} limit=${cli.limit} dryRun=${cli.dryRun} noLlm=${cli.noLlm}`);
-  const entities = await discover({ token, date: cli.date, log });
+  const { entities, diag } = await discover({ token, date: cli.date, log });
   const seen = loadSeenKeys(DATA_DIR, cli.date);
   const picked = pickTopEntities(entities, { limit: cli.limit, seen });
   const generatedAt = new Date().toISOString();
+
+  if (picked.length === 0) {
+    log('⚠️ 本次未选出任何 skill。诊断信息：');
+    console.log(JSON.stringify({ ...diag, picked: picked.length }, null, 2));
+    log('请把上方诊断贴给维护者，或在本地先跑：node scripts/build.mjs --raw-star-history openai/skills 查看真实字段。');
+    process.exit(1);
+  }
 
   if (cli.dryRun) {
     for (const [i, it] of picked.entries()) {
